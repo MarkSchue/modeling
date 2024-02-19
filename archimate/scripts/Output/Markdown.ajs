@@ -1,0 +1,391 @@
+﻿/*
+ * Generate a Markdown Report of all Views in a Selected Folder
+ * 
+ * Based on smileham/Export to Markdown.ajs - https://gist.github.com/smileham/578bbbb88dc0ed5a1403f3b98711ec25 
+ * (c) 2018 Steven Mileham
+ * 
+ * 
+ * Requires jArchi - https://www.archimatetool.com/blog/2018/07/02/jarchi/
+ * 
+ * Markdown - https://www.markdownguide.org/
+ * 
+ * Change var scale to 2 for higher diagram resolution but also larger file sizes
+ * 
+ * The script reads specific properties on the Views and Elements to determine what should be included or excluded
+ * from the report.
+ * 
+ * Properties:
+ * 1. On a View, set Report:View:Hide = true to hide the View from the Report.
+ * 
+ * 2. On a View, set Report:View:Hide:Notes = true to hide Notes on the View from the Report.
+ * 
+ * 3. On a View, set Report:View:Hide:Elements = true to hide the elements on the View from the Report.
+ * 
+ * 4. On a View, set Report:View:Show:Properties = true to show properties for elements.
+ * 
+ * 5. On a View, set Report:View:Elements:Tag = value. value can then used as the Property Name in the properties of
+ * selected Elements on the View and by setting the value = true, to only include these Elements in the Report.
+ * 
+ * Example:
+ * Properties on a View
+ * ==============================
+ * Name = Report:View:Elements:Tag
+ * Value = sapcbsa
+ * 
+ * Properties on selected View Elements
+ * ====================================
+ * Name = sapcbsa
+ * Value = true
+ * 
+ * Property Report:View:Elements:Tag if set, overides Report:View:Hide:Elements.
+ * 
+ * In order to create a PDF file from the Markdown file, a suitable Markdown tool is required.  Not all
+ * Markdown tools support the same extended Markdown syntax and generate the same output, so experimentation
+ * with different tools might be required.  This is especially the case with anchor elements in the document
+ * and linking in the document to them.
+ * 
+ * The Visual Studio Code extension Markdown PDF v1.4.4 by yzane has been successfully tested to convert
+ * markdown to pdf.
+ * 
+ * Author: Fanie van Heerden, 2023
+ * 
+ * Version: 1.0 - Initial version.
+ *          1.1 - Enabled printing of element properties.
+ * 
+ */
+
+
+const embed = false;
+var folder = [];
+var views = [];
+var allElements = [];
+var viewElements = [];
+var showProperties = false;
+const propTableStyle = 2;
+
+var i = 0;
+const sortObject = obj => Object.keys(obj).sort().reduce((res, key) => (res[key] = obj[key], res), {});
+const scale = 1;
+var baseDir = "";
+var elementTag = "";
+
+function convertToText(type) {
+    var theString = type.replaceAll("-"," ").split(" ");
+    var theResult = "";
+    for (var i=0; i<theString.length; i++){
+        theResult+= theString[i][0].toUpperCase()+theString[i].substring(1,theString[i].length) + " ";
+    }
+    return theResult.trim();
+}
+
+function escapeMD(theString){
+    var newString = theString.replaceAll("<","&lt;").replaceAll("\n>","\n~QUOTE~");
+    return newString.substring(0,1)+newString.substring(1).replaceAll(">","&gt;").replaceAll("~QUOTE~",">");
+}
+
+function generateLink(theString) {
+    var regex = /[\[\]\#\\\/\"]/gi;
+    return theString.toLowerCase().replace(regex,"")
+                                      .replaceAll(" ","-")
+                                      .replaceAll("\<","lt")
+                                      .replaceAll("\>","gt");
+}
+
+function CleanFileName(theString) {
+    var regex = /[\[\]\(\)\#\\\/\"]/gi;
+    return theString.replace(regex,"")
+                    .replaceAll(" ","-");
+}
+
+function generatePageBreak() {
+    var theResult = "";    
+    theResult+="\n<div style=\"page-break-after: always\"></div>\n\n";
+    return theResult;
+}
+
+function nestedElements(element) {
+    $(element).children().not("relationship").each(function(e) {
+        if (e.name) {
+            
+            var theHash = generateLink(e.name +" ("+ convertToText(e.type)+")");
+
+            if (elementTag.length > 0) {
+                var theValue = e.prop(elementTag)!=null?e.prop(elementTag):"";
+                if (theValue == "true") {
+                    allElements[theHash] = e;
+                    viewElements[theHash] = e;
+                }
+
+            } else {
+                allElements[theHash] = e;
+                viewElements[theHash] = e;
+            }
+ 
+            if ($(e).children().length>0) {
+                nestedElements(e);
+            }
+        }
+    });
+}
+
+function propertiesTable1(element) {
+    var theProperties = element.prop();
+    var theHeader = "";
+    var theLine = "";
+    var theBody = "";
+    var theTable = "";
+    var charCount = 0;
+    for (var i = 0; i < theProperties.length; i++){
+        if ((charCount + theProperties[i].length) < 80 && (charCount + element.prop(theProperties[i]).length) < 80) {
+            theHeader += "|" + theProperties[i];
+            theLine += "|---";
+            theBody += "|" + element.prop(theProperties[i]);
+            charCount += Math.max(theProperties[i].length, element.prop(theProperties[i]).length);
+        } else {
+            theTable += theHeader + "|\n" + theLine + "|\n" + theBody + "|\n\n";
+            theHeader = "|" + theProperties[i];
+            theLine = "|---";
+            theBody = "|" + element.prop(theProperties[i]);
+            charCount = Math.max(theProperties[i].length, element.prop(theProperties[i]).length);
+        }
+
+        if (i === (theProperties.length - 1)) {
+            theTable += theHeader + "|\n" + theLine + "|\n" + theBody + "|\n\n";
+        }
+    }
+    if (theProperties.length > 0) {
+        return "**Properties**\n" + theTable + "\n";
+    }
+    else {
+        return "";
+    }
+}
+
+function propertiesTable2(element) {
+    var theProperties = element.prop();
+    var theHeader = "\n| Property | Value |\n| --- | --- |\n";
+    var theBody = "";
+    
+    for (var i = 0; i < theProperties.length; i++){
+        theBody += "| " + theProperties[i] + " | " + element.prop(theProperties[i]) + " |\n";   
+    }
+    if (theProperties.length > 0) {
+        return "**Properties**" + theHeader + theBody;
+    }
+    else {
+        return "";
+    }
+}
+
+
+function generateElementDocumentation(showProperties) {
+    let sortedElements = sortObject(allElements);
+    var theResult = "";
+
+    theResult+=generatePageBreak();
+    theResult+="\n\n## <a id=\"elements\"><span style=\"color:rgb(124,169,191)\">Elements</span></a>\n\n";
+
+    Object.entries(sortedElements).forEach(elementObj => {
+        let key = elementObj[0];
+        let val = elementObj[1];
+        theResult+="### <a id=\""+key+"\"><span style=\"color:rgb(124,169,191)\">"+val.name+" - "+val.type+"</span></a>\n";
+
+        if (val.documentation != "") {
+            theResult+="\n"+val.documentation+"\n\n"
+        }
+
+        if (showProperties) {
+            switch(propTableStyle) {
+                case 1:
+                    theResult+=propertiesTable1(elementObj[1]);
+                case 2:
+                    theResult+=propertiesTable2(elementObj[1]);
+                default:
+            }
+        }
+    });
+
+    return theResult;
+}
+
+function generateCoverPage(element) {
+    var theResult = "";
+    theResult+="\n\n# <span style=\"color:rgb(124,169,191)\">"+element.name+"</span>\n\n";
+    theResult+="\nGenerated: "+ new Date().toLocaleString()+"\n";
+
+    if (element.documentation.length > 0) {
+        theResult+="\n "+element.documentation+"\n  ";
+    }
+
+    theResult+="\n## <span style=\"color:rgb(124,169,191)\">Views</span>\n\n"
+
+    let sortedViews = sortObject(views);
+    var viewNo = 0;
+
+    Object.values(sortedViews).forEach(val => {
+        viewNo++;
+        theResult+="["+val.name+"](#view"+viewNo+")  \n";
+    });
+
+    theResult+="\n## <span style=\"color:rgb(124,169,191)\">Elements</span>\n\n";
+    theResult+="[Elements](#elements)  \n"; 
+
+    return theResult;
+}
+
+function generateView(theView, viewNo, path)
+{
+        
+    if (theView) {
+
+        var showView = true;
+        var showElements = true;
+        var showNotes = true;
+        elementTag = "";
+
+        var theValue = theView.prop("Report:View:Hide")!=null?theView.prop("Report:View:Hide"):"";
+        if (theValue == "true") {
+            showView = false;
+        }
+
+        if(!showView) {
+            console.log("=== Don't include this view in the report based on the value of the property Report:View:Hide property = true")
+            return;
+        }
+
+        theValue = theView.prop("Report:View:Hide:Notes")!=null?theView.prop("Report:View:Hide:Notes"):"";
+        if (theValue == "true") {
+            showNotes = false;
+            console.log("=== Don't include Notes in the report for this view based on the value of the property Report:View:Hide:Notes = true");
+        }
+
+        theValue = theView.prop("Report:View:Hide:Elements")!=null?theView.prop("Report:View:Hide:Elements"):"";
+        if (theValue == "true") {
+            showElements = false;
+        }
+
+        theValue = theView.prop("Report:View:Show:Properties")!=null?theView.prop("Report:View:Show:Properties"):"";
+        if (theValue == "true") {
+            showProperties = true;
+        }
+
+        theValue = theView.prop("Report:View:Elements:Tag")!=null?theView.prop("Report:View:Elements:Tag"):"";
+        if (theValue.length>0) {
+            showElements = true;
+            elementTag = theValue;
+            console.log("=== Only include selected elements in the report that have the property name="+theValue+" = true");
+        }     
+
+        theDocument+=generatePageBreak();
+
+        theDocument+="## "+"<a id=\"view"+viewNo+"\"><span style=\"color:rgb(124,169,191)\">"+theView.name+"</span></a>\n\n";
+
+        if (embed==true){
+            var bytes = $.model.renderViewAsBase64(theView, "PNG", {scale: scale, margin: 10});
+            theDocument+="\n!["+theView.name+"](data:image/png;base64,"+bytes+")\n";
+        }
+        else {theDocument+="\n!["+theView.name+"][embedView"+viewNo+"]\n";}
+
+        theView.documentation!=""?theDocument+="\n"+theView.documentation+"\n":true;
+
+        // Notes with no relationships
+        if (showNotes) {
+            $(theView).find().not("element").not("relationship").each(function(c){
+                if (c.text) {
+                    if ($(c).rels().length==0) {
+                        theDocument+="\n"+escapeMD(c.text).replaceAll("\n","\n> ")+"\n";
+                    }
+                };
+            })
+        }
+
+
+        if (showElements) {
+            viewElements = [];
+            nestedElements(theView);
+            elementTag = "";
+            let sortedElements = sortObject(viewElements);
+
+            theDocument+="\n| Element | Type |\n| --- | --- |\n"
+            Object.entries(sortedElements).forEach(elementObj => {
+                let key = elementObj[0];
+                let val = elementObj[1];
+                theDocument+="| ["+val.name+"](#"+key+") | "+val.type+" |\n";
+            });
+        } else {
+            console.log("=== Don't include elements in the report based on the value of the property Report:View:Hide:Elements = true");
+        }
+
+        if (!embed) {
+                var imageName = CleanFileName(theView.name);
+                imageURL = imageName + ".png";
+                var bytes = $.model.renderViewAsBase64(theView, "PNG", {scale: scale, margin: 10});
+                $.fs.writeFile(path + imageURL, bytes, "BASE64");    
+                theDocument+="\n[embedView"+viewNo+"]: "+ imageURL +"\n";
+        }
+
+    }
+
+}
+
+function generateViews()
+{
+    let sortedViews = sortObject(views);
+    var viewNo = 0;
+
+    Object.values(sortedViews).forEach(val => {
+        console.log(val);
+        viewNo++;
+        generateView(val, viewNo, baseDir);
+    });
+}
+
+
+function getFolder(item)
+{
+    $(item).children().each(function(child){
+        if(child.type == "folder")
+        {
+            folder[i] = child.name;
+            i++;
+            getFolder(child);
+            i--;
+            folder.pop();
+        }
+        if(child.type == "archimate-diagram-model")
+        {
+            var theHash = generateLink(child.name +" ("+ convertToText(child.type)+")");
+            views[theHash] = child;
+        }
+    });
+}
+
+console.show();
+console.clear();
+console.log("Export to Markdown");
+
+var theDocument = "";
+
+if ($(selection).filter("folder").size() == 1) {
+    var selectedFolder = $(selection).filter("folder").first();
+
+    var defaultFileName = CleanFileName(selectedFolder.name) + ".md";
+    var markdownFileName = window.promptSaveFile({ title: "Export to Markdown", filterExtensions: [ "*.md" ], fileName: defaultFileName } );
+
+    var stripPath = markdownFileName.replace(/^.*[\\\/]/,'');
+    baseDir = markdownFileName.substring(0, markdownFileName.length - stripPath.length);
+    console.log("Markdown FileName: "+markdownFileName);
+    console.log("BaseDir: "+baseDir);
+
+    getFolder(selectedFolder);
+    theDocument+=generateCoverPage(selectedFolder);
+    generateViews();
+    theDocument+=generateElementDocumentation(showProperties);
+    $.fs.writeFile(markdownFileName, theDocument);
+    console.log("> Export done");
+
+}
+else
+{
+    console.log("> Please select a Folder containing the Views. Only one folder should be selected");
+};

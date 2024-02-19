@@ -1,0 +1,132 @@
+﻿/*
+ * This script reads a CSV file with the following columns: Relationship type, Relationship name, Source Element name, Source Element type", Target Element name, Target Element type, {<property-name>}. Each row represents one element along with its main attributes,  
+ * and is loaded into the current model according to these rules:
+ * -- if the relationship (defined by the Name/Type pair) exists in the current model, its properties are updated (subject to "overwriteAttributes" and "blankMeansDontChange" below)
+ * -- if not, a new relationship is created (along with its properties)
+ * -- the Type field is mandatory, but Name and properties can be empty
+ * -- if a relationship in the CSV matches several existing relationship, it is ignored
+ * -- the script does not create any views or visual diagram objects for the imported elements; therefore, it cannot load any visual attributes, such as style or label
+ * 
+ * Author: christhearchitect
+ * Version: 0.2
+ * 
+ * (credits: some code from https://gist.github.com/smileham/1e57a5946235e780dee5a824f664aa3d used to read CSV )
+ * 
+ */
+ 
+
+console.clear(); 
+console.log("ImportRelationshipsFromCSV\n--------------------------\n");
+
+// Constants: change them to suit your needs
+
+var headerColumns        = ["Relationship type", "Relationship name", "Source Element name", "Source Element type", "Target Element name", "Target Element type"]; // will be checked agains actual CSV
+var addSourceProp        = true;       // if true, property "Source = <filename>" will be added to every element created
+var overwriteAttributes  = true;       // if an element already exists, its Documentation and Properties attributes in the CSV will overwrite those in the model
+var blankMeansDontChange = true;       // when updating attributes, blank ("") attributes are left unchanged even if overwriteAttributes is true
+
+var debug = false;
+
+// End of Constants
+
+
+var newRelCount = 0;
+var updRelCount = 0;
+
+
+//TBD: check that current model is defined
+
+load(__DIR__ + "lib/papaparse.min.js");
+debug?console.log("// Loaded library: PapaParse"):null;
+
+var filePath = window.promptOpenFile({ title: "Open CSV file", filterExtensions: ["*.CSV"], fileName: "" });
+
+
+if (filePath) {
+    var fileName = filePath.replace(/^.*(\\|\/|\:)/, '');
+    var FileReader = Java.type("java.io.FileReader");
+    var Types = Java.type("java.nio.charset.StandardCharsets");
+    var theCSVFile = new FileReader(filePath,Types.UTF_8);
+
+    var theCSV ="";
+    
+    var data = theCSVFile.read();
+    console.log("> Loading file, please wait...");
+    while(data != -1) {
+        var theCharacter = String.fromCharCode(data);
+        theCSV+=theCharacter;
+        data = theCSVFile.read();
+    }
+    theCSVFile.close();
+    console.log("> File Loaded");
+
+    theDataFile = Papa.parse(theCSV);
+    theData = theDataFile.data;
+    console.log("> Parsing Complete");
+
+    debug?console.log("// Actual CSV header  : '"+theData[0].slice(0,headerColumns.length)+"'\n// Expected header: '"+headerColumns+"'"):null;
+
+    if (theData[0].slice(0,headerColumns.length).toString()==headerColumns.toString()) {
+        // Header matches the expected columns
+        for (i=1; i<theData.length; i++) {
+            // Iterate over each data row and create the corresponding new relationships
+            debug?console.log("// CSV data",i,"=",theData[i],theData[i][0].length==0?"(skipping)":"(processing)"):null;
+            if (theData[i][0].length>0) {
+                var curRelType    = theData[i][0];
+                var curRelName    = theData[i][1];
+                var curSourceName = theData[i][2];
+                var curSourceType = theData[i][3];
+                var curTargetName = theData[i][4];
+                var curTargetType = theData[i][5];
+                var curSourceMatch = $("."+curSourceName).filter(curSourceType);
+                var curTargetMatch = $("."+curTargetName).filter(curTargetType);
+                if (curSourceMatch.length==0 || curTargetMatch.length==0) {
+                    console.log("> Error in CSV row "+i+": no match for one of the ends ("+curSourceType+":"+curSourceName+" or "+curTargetType+":"+curTargetName+") -- no action");
+                } else if (curSourceMatch.length>1 || curTargetMatch.length>1) {
+                    console.log("> Error in CSV row "+i+": more than one match for one of the ends ("+curSourceType+":"+curSourceName+" or "+curTargetType+":"+curTargetName+") -- no action");
+                } else { // curSourceMatch.length==1 && // curTargetMatch.length==1
+                    var curOutRels = $("."+curSourceName).outRels().filter(curRelType).filter("."+curRelName);
+                    var curInRels  = $("."+curTargetName).inRels().filter(curRelType).filter("."+curRelName);
+                    debug?console.log("//     outRels =",curOutRels):null;
+                    debug?console.log("//     inRels  =",curInRels):null;
+                    // Compute intersection of both sets of relationships:
+                    var curExistingRels = curOutRels.filter(function(o) { return curInRels.filter(o.type).filter("."+o.name).length>0; });
+                    debug?console.log("//     Existing relationships FROM",curSourceType+":"+curSourceName,"TO",curTargetType+":"+curTargetName,"=",curExistingRels):null;
+                    if (curExistingRels.length==0) {
+                        // Create new relationship
+						debug?console.log("//     Creating new relationship",curRelType+":"+curRelName,"FROM",curSourceType+":"+curSourceName,"TO",curTargetType+":"+curTargetName,"=",curExistingRels):null;
+                        var curRelationship = model.createRelationship(curRelType,curRelName,curSourceMatch[0],curTargetMatch[0]);
+						if (addSourceProp) {curRelationship.prop("Source","CSV import from '"+fileName+"'")};
+                        newRelCount++;
+					} else {
+						var curRelationship = curExistingRels[0];
+                    };
+					if (curExistingRels.length==0 || (curExistingRels.length==1 && overwriteAttributes)) {
+						// In both cases, we need to update the relationship's properties
+                        for (p=headerColumns.length; p<theData[i].length; p++) {
+							// Set any valid properties defined in the CSV (skip if the column header is "")
+							if (theData[0][p].length>0) {
+                                if (theData[i][p]=="" && blankMeansDontChange) {
+                                    debug?console.log("//     Skipping blank property",theData[0][p]):null;
+                                } else {  
+                                    debug?console.log("//     Setting property "+theData[0][p]+" = '"+theData[i][p]+"'"):null;
+                                    curRelationship.prop(theData[0][p],theData[i][p]);
+                                }
+							}
+						}
+						updRelCount++; // note that new relationships are also counted here -- we'll correct this further down the line
+					} else {
+                        // More than one relationship: skip update
+                        console.log("> Error in CSV row "+i+": more than one match for the relationship ("+curRelType+":"+curRelName+") -- no action");
+                    }
+                }    
+            }
+        }
+		updRelCount -= newRelCount; // Because of the above if/else sequence, uprRelCount was also incremented after a new relationship was created
+        console.log("\n>", newRelCount, "new elements created\n>", updRelCount, "existing elements "+(overwriteAttributes?"updated":"skipped"));
+    } else {
+        console.log("> Error: the header in", "'"+filePath+"' does not match expected columns "+headerColumns);
+    }
+} else {
+    console.log("> Cancelled");
+}
