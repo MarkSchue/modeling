@@ -1,0 +1,39 @@
+﻿// Copy the selected elements to another model 
+//
+// https://gist.github.com/eduardobbs/e39b00f45d12f43a55c31823facf0926
+// Requires jArchi - https://www.archimatetool.com/plugins/
+//
+// (c) 2020 Eduardo Cuccolotto Sequinel
+
+var msg = "Which model is the destination one (enter its index)?";
+
+var modelList = $.model.getLoadedModels();
+
+for (i = 0; i < modelList.length; i++) {
+    msg += "\n  (" + i + ") " + modelList[i];
+}
+
+var answer = window.prompt(msg, "");
+
+if (!answer) {
+    console.log("Copy canceled");
+} else {
+
+    console.log("*************************\ncopying elements to another model");
+
+    model = modelList[answer];
+    model.setAsCurrent();
+
+    $(selection).each(function (e) {
+        newElement = model.createElement(e.type, e.name);
+        newElement.documentation = e.documentation;
+
+        var props = e.prop();
+
+        for (i = 0; i < props.length; i++) {
+            newElement.prop(props[i], e.prop(props[i]));
+        }
+    });
+
+    console.log($(selection).length + " items copied to " + model);
+}
